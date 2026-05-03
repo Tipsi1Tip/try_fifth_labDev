@@ -1,60 +1,49 @@
-name: communication-control-project
+version: "3.8"
 
 services:
   redis:
-    image: redis:alpine
-    restart: always
-    ports:
-      - "6379:6379"
-    volumes:
-      - ./data:/data
+    image: redis:latest
+    restart: unless-stopped
     networks:
-      - net1
+      - hive-network
 
-  comm:
-    build:
-      context: ./src/CommunicationControl/DevOpsProject
-      dockerfile: Dockerfile
+  communication-control:
+    image: ${REGISTRY}/hiveemulator/communication-control:${TAG}
     ports:
-      - "8080:8080"
-    environment:
-      - Redis__ConnectionString=redis:6379
+      - "${COM_PORT}:8080"
     depends_on:
       - redis
-    networks:
-      - net1
-
-  hive:
-    build:
-      context: ./src/CommunicationControl/DevOpsProject.HiveMind.API
-      dockerfile: Dockerfile
-    ports:
-      - "5149:5149"
     environment:
-      - CommunicationConfiguration__CommunicationControlIP=comm
-      - CommunicationConfiguration__CommunicationControlPort=8080
-      - CommunicationConfiguration__RequestSchema=http
-      - CommunicationConfiguration__CommunicationControlPath=api/v1/hive
-      - CommunicationConfiguration__HiveIP=hive
-      - CommunicationConfiguration__HivePort=5149
-      - CommunicationConfiguration__HiveID=1
-      - ASPNETCORE_ENVIRONMENT=Development
-    depends_on:
-      - comm
+      - Redis__ConnectionString=redis:6379
+    restart: unless-stopped
     networks:
-      - net1
+      - hive-network
 
-  web:
-    build:
-      context: ./src/MapClient
-      dockerfile: Dockerfile
+  map-client:
+    image: ${REGISTRY}/hiveemulator/map-client:${TAG}
     ports:
-      - "80:80"
-    stdin_open: true
-    tty: true
+      - "${MAP_PORT}:80"
+    depends_on:
+      - communication-control
+    restart: unless-stopped
     networks:
-      - net1
+      - hive-network
+
+  hive-mind:
+    image: ${REGISTRY}/hiveemulator/hive-mind:${TAG}
+    ports:
+      - "${HIVE_PORT}:5149"
+    depends_on:
+      - redis
+      - communication-control
+    environment:
+      - Redis__ConnectionString=redis:6379
+      - CommunicationConfiguration__CommunicationControlIP=communication-control
+      - CommunicationConfiguration__CommunicationControlPort=8080
+    restart: unless-stopped
+    networks:
+      - hive-network
 
 networks:
-  net1:
+  hive-network:
     driver: bridge

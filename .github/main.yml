@@ -1,0 +1,100 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Restore packages
+        run: dotnet restore src/CommunicationControl/DevOpsProject.sln
+      - name: Setup Snyk
+        uses: snyk/actions/setup@master
+      - name: Snyk Security Check
+        run: snyk test --all-projects
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  build-and-push:
+    needs: sast
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      registry: ${{ steps.login-ecr.outputs.registry }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build & Publish Services
+        run: |
+          dotnet publish src/CommunicationControl/DevOpsProject/DevOpsProject.CommunicationControl.API.csproj -c Release -o src/CommunicationControl/DevOpsProject/published
+          dotnet publish src/CommunicationControl/DevOpsProject.HiveMind.API/DevOpsProject.HiveMind.API.csproj -c Release -o src/CommunicationControl/DevOpsProject.HiveMind.API/published
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build Frontend
+        run: |
+          cd src/MapClient
+          npm install
+          npm run build
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and Push Images
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/hiveemulator/communication-control:$TAG -f src/CommunicationControl/DevOpsProject/Dockerfile src/CommunicationControl/DevOpsProject
+          docker build -t $REGISTRY/hiveemulator/hive-mind:$TAG -f src/CommunicationControl/DevOpsProject.HiveMind.API/Dockerfile src/CommunicationControl/DevOpsProject.HiveMind.API
+          docker build -t $REGISTRY/hiveemulator/map-client:$TAG -f src/MapClient/Dockerfile src/MapClient
+          docker push $REGISTRY/hiveemulator/communication-control:$TAG
+          docker push $REGISTRY/hiveemulator/hive-mind:$TAG
+          docker push $REGISTRY/hiveemulator/map-client:$TAG
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH Deploy to VPS
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/hive-emulator
+            export REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
+            export TAG=${{ github.sha }}
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin $REGISTRY
+            
+            if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+              export COM_PORT=8080
+              export MAP_PORT=3000
+              export HIVE_PORT=5149
+              export PROJ_NAME="prod"
+            else
+              export COM_PORT=8081
+              export MAP_PORT=3001
+              export HIVE_PORT=5150
+              export PROJ_NAME="dev"
+            fi
+            
+            sudo -E docker-compose -p $PROJ_NAME up -d --pull always
