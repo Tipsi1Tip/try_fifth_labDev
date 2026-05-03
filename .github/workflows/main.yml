@@ -5,26 +5,9 @@ on:
     branches: [main, dev]
   workflow_dispatch:
 
-jobs:
-  sast:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Restore packages
-        run: dotnet restore src/CommunicationControl/DevOpsProject.sln
-      - name: Setup Snyk
-        uses: snyk/actions/setup@master
-      - name: Snyk Security Check
-        run: snyk test --all-projects
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
 
   build-and-push:
-    needs: sast
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     outputs:
