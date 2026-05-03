@@ -81,3 +81,4 @@ on:
             fi
             
             sudo -E docker-compose -p $PROJ_NAME up -d --pull always
+# 2
