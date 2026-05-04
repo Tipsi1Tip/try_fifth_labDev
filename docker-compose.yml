@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
     networks:
       - hive-network
-
+# 2
   map-client:
     image: ${REGISTRY}/hiveemulator/map-client:${TAG}
     ports:
